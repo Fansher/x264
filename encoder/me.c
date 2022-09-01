@@ -200,6 +200,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
     int mv_y_min = h->mb.mv_limit_fpel[0][1];
     int mv_x_max = h->mb.mv_limit_fpel[1][0];
     int mv_y_max = h->mb.mv_limit_fpel[1][1];
+   // 将2个16位整数拼接成一个32位的整数
 /* Special version of pack to allow shortcuts in CHECK_MVRANGE */
 #define pack16to32_mask2(mx,my) (((uint32_t)(mx)<<16)|((uint32_t)(my)&0x7FFF))
     uint32_t mv_min = pack16to32_mask2( -mv_x_min, -mv_y_min );
@@ -219,7 +220,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
         int bpred_mx = x264_clip3( m->mvp[0], SPEL(mv_x_min), SPEL(mv_x_max) );
         int bpred_my = x264_clip3( m->mvp[1], SPEL(mv_y_min), SPEL(mv_y_max) );
         pmv = pack16to32_mask( bpred_mx, bpred_my );
-        pmx = FPEL( bpred_mx );
+        pmx = FPEL( bpred_mx );  //mvp是1/4像素坐标，转换成整像素坐标
         pmy = FPEL( bpred_my );
 
         COST_MV_HPEL( bpred_mx, bpred_my, bpred_cost );

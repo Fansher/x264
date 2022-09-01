@@ -511,6 +511,7 @@ static void frame_init_lowres_core( pixel *src0, pixel *dst0, pixel *dsth, pixel
 
 /* Estimate the total amount of influence on future quality that could be had if we
  * were to improve the reference samples used to inter predict any given macroblock. */
+// 计算遗传代价（该函数计算的是一帧图像中的一行宏块（最后一个参数len表示一行宏块的个数））
 static void mbtree_propagate_cost( int16_t *dst, uint16_t *propagate_in, uint16_t *intra_costs,
                                    uint16_t *inter_costs, uint16_t *inv_qscales, float *fps_factor, int len )
 {
@@ -520,13 +521,18 @@ static void mbtree_propagate_cost( int16_t *dst, uint16_t *propagate_in, uint16_
         int intra_cost = intra_costs[i];
         int inter_cost = X264_MIN(intra_costs[i], inter_costs[i] & LOWRES_COST_MASK);
         float propagate_intra  = intra_cost * inv_qscales[i];
-        float propagate_amount = propagate_in[i] + propagate_intra*fps;
+        // 当前宏块的总信息量：帧内代价的信息量 + 参考它的块瓜分给它的信息量（如果不被参考，那么对应值为0）
+        // 注意理解：此处说的是当前这个块会被其他块参考，propagate_in就是来自参考它的块给它的信息量
+        float propagate_amount = propagate_in[i] + propagate_intra*fps;  // 用于继承率计算
         float propagate_num    = intra_cost - inter_cost;
         float propagate_denom  = intra_cost;
+        // 而下面最终计算得到的信息量，是需要瓜分给它参考的块
+        // 根据继承率，计算当前这个块，有多少信息是来自它的参考块的，这个信息量会瓜分给它的参考块
         dst[i] = X264_MIN((int)(propagate_amount * propagate_num / propagate_denom + 0.5f), 32767);
     }
 }
 
+// 瓜分信息量给参考帧，瓜分的信息量保存在ref_costs中
 static void mbtree_propagate_list( x264_t *h, uint16_t *ref_costs, int16_t (*mvs)[2],
                                    int16_t *propagate_amount, uint16_t *lowres_costs,
                                    int bipred_weight, int mb_y, int len, int list )

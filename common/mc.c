@@ -215,17 +215,21 @@ static void mc_luma( pixel *dst,    intptr_t i_dst_stride,
         mc_copy( src1, i_src_stride, dst, i_dst_stride, i_width, i_height );
 }
 
+// 根据运动矢量分析返回参考块区域的像素（指针）
 static pixel *get_ref( pixel *dst,   intptr_t *i_dst_stride,
                        pixel *src[4], intptr_t i_src_stride,
                        int mvx, int mvy,
                        int i_width, int i_height, const x264_weight_t *weight )
 {
-    int qpel_idx = ((mvy&3)<<2) + (mvx&3);
+    // 对于坐标点mvx/mvy，最后一位表示1/4精度坐标，倒数第二位表示1/2精度坐标，其它位表示整像素精度坐标
+    int qpel_idx = ((mvy&3)<<2) + (mvx&3); // 取出运动矢量的分像素部分（最后4位为有效位）
     int offset = (mvy>>2)*i_src_stride + (mvx>>2);
     pixel *src1 = src[x264_hpel_ref0[qpel_idx]] + offset + ((mvy&3) == 3) * i_src_stride;
 
     if( qpel_idx & 5 ) /* qpel interpolation needed */
     {
+        // 5对应二进制为01-01，用于判断是否需要进行1/4插值（只要mvx或者mvy对应的1/4精度位不为0，就需要1/4精度插值）
+        // 因为之前只会进行1/2像素精度插值，1/4精度只会在判断需要的时候才会临时进行插值
         pixel *src2 = src[x264_hpel_ref1[qpel_idx]] + offset + ((mvx&3) == 3);
         pixel_avg( dst, *i_dst_stride, src1, i_src_stride,
                    src2, i_src_stride, i_width, i_height );
@@ -235,6 +239,8 @@ static pixel *get_ref( pixel *dst,   intptr_t *i_dst_stride,
     }
     else if( weight->weightfn )
     {
+        // 此时，qpel_idx最后4位有效位是x0-x0，只需要处理整像素和1/2像素两种情况，直接返回即可
+        // elseif与else区别只在于是否有权重参考
         mc_weight( dst, *i_dst_stride, src1, i_src_stride, weight, i_width, i_height );
         return dst;
     }

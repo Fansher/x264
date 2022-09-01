@@ -1048,35 +1048,46 @@ static void macroblock_tree_finish( x264_t *h, x264_frame_t *frame, float averag
     }
 }
 
+// 计算当前宏块的遗传代价propagate_cost，同时计算当前宏块集成来自参考块的信息量propagate_amount，并将信息量瓜分到参考块中，最后换算成qp偏移量
 static void macroblock_tree_propagate( x264_t *h, x264_frame_t **frames, float average_duration, int p0, int p1, int b, int referenced )
 {
-    uint16_t *ref_costs[2] = {frames[p0]->i_propagate_cost,frames[p1]->i_propagate_cost};
+    // 取前后向参考帧p0、p1的propagate_cost
+    uint16_t *ref_costs[2] = {frames[p0]->i_propagate_cost,frames[p1]->i_propagate_cost}; 
+    // 距离因子，参考帧距离当前帧的距离也决定了信息量的瓜分比例
     int dist_scale_factor = ( ((b-p0) << 8) + ((p1-p0) >> 1) ) / (p1-p0);
+    // 预测权重，同理
     int i_bipred_weight = h->param.analyse.b_weighted_bipred ? 64 - (dist_scale_factor>>2) : 32;
     int16_t (*mvs[2])[2] = { b != p0 ? frames[b]->lowres_mvs[0][b-p0-1] : NULL, b != p1 ? frames[b]->lowres_mvs[1][p1-b-1] : NULL };
     int bipred_weights[2] = {i_bipred_weight, 64 - i_bipred_weight};
-    int16_t *buf = h->scratch_buffer;
+    int16_t *buf = h->scratch_buffer;  // 取buffer用于存储计算的propagate_cost
     uint16_t *propagate_cost = frames[b]->i_propagate_cost;
-    uint16_t *lowres_costs = frames[b]->lowres_costs[b-p0][p1-b];
+    // 取当前帧b以p0为前向参考，p1为后向参考的satd。satd的计算不是在原始像素上进行的，而是在下采样后算的
+    uint16_t *lowres_costs = frames[b]->lowres_costs[b-p0][p1-b]; 
 
     x264_emms();
     float fps_factor = CLIP_DURATION(frames[b]->f_duration) / (CLIP_DURATION(average_duration) * 256.0f) * MBTREE_PRECISION;
 
     /* For non-reffed frames the source costs are always zero, so just memset one row and re-use it. */
+    // 如果当前帧不被参考，说明它不会遗传信息给其他帧，所以它的遗传代价为0
+    // 为什么只用赋值第一行呢？因为其他行也是0，可以直接复用第一行的数据
     if( !referenced )
         memset( frames[b]->i_propagate_cost, 0, h->mb.i_mb_width * sizeof(uint16_t) );
 
+    // 否则，按行来计算每一个宏块的遗传代价propagate_cost（按行来计算）
     for( h->mb.i_mb_y = 0; h->mb.i_mb_y < h->mb.i_mb_height; h->mb.i_mb_y++ )
     {
         int mb_index = h->mb.i_mb_y*h->mb.i_mb_stride;
+        // 1.计算一行数据的propagate_cost，计算值保存到buf中
         h->mc.mbtree_propagate_cost( buf, propagate_cost,
             frames[b]->i_intra_cost+mb_index, lowres_costs+mb_index,
             frames[b]->i_inv_qscale_factor+mb_index, &fps_factor, h->mb.i_mb_width );
         if( referenced )
-            propagate_cost += h->mb.i_mb_width;
+            propagate_cost += h->mb.i_mb_width; // 此处就说明了如果不被参考，就复用第一行的数据，不需要转到下一行
 
+        // 2.将当前宏块计算得到的propagate_cost瓜分到它的参考宏块中（前向瓜分）
         h->mc.mbtree_propagate_list( h, ref_costs[0], &mvs[0][mb_index], buf, &lowres_costs[mb_index],
                                      bipred_weights[0], h->mb.i_mb_y, h->mb.i_mb_width, 0 );
+        // 2.将当前宏块计算得到的propagate_cost瓜分到它的参考宏块中（后向瓜分）
         if( b != p1 )
         {
             h->mc.mbtree_propagate_list( h, ref_costs[1], &mvs[1][mb_index], buf, &lowres_costs[mb_index],
@@ -1084,6 +1095,7 @@ static void macroblock_tree_propagate( x264_t *h, x264_frame_t **frames, float a
         }
     }
 
+    // 3.计算每个宏块的量化偏移值
     if( h->param.rc.i_vbv_buffer_size && h->param.rc.i_lookahead && referenced )
         macroblock_tree_finish( h, frames[b], average_duration, b == p1 ? b - p0 : 0 );
 }
@@ -1102,9 +1114,10 @@ static void macroblock_tree( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **fr
 
     int i = num_frames;
 
-    if( b_intra )
+    if( b_intra ) //第一帧如果是关键帧就计算关键帧的satd
         slicetype_frame_cost( h, a, frames, 0, 0, 0 );
 
+    // （向前递推）寻找lookahead队列中最后一个非B帧的位置
     while( i > 0 && IS_X264_TYPE_B( frames[i]->i_type ) )
         i--;
     last_nonb = i;
@@ -1130,21 +1143,32 @@ static void macroblock_tree( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **fr
         memset( frames[last_nonb]->i_propagate_cost, 0, h->mb.i_mb_count * sizeof(uint16_t) );
     }
 
+    //lookahead队列：
+    //			              nonb  ......  nonb	......	   nonb	  ......	 nonb	 ......
+    //	round1:							                           cur_nonb    ...	 last_nonb
+    //	round2:				                  cur_nonb  ...  last_nonb
+    //							          ...
+    //	roundn:           cur_nonb	... last_nonb
     while( i-- > idx )
     {
+        // 寻找当前round的非B帧，即从最后一个非B帧开始向前递推，找到cur_nonb
         cur_nonb = i;
         while( IS_X264_TYPE_B( frames[cur_nonb]->i_type ) && cur_nonb > 0 )
             cur_nonb--;
         if( cur_nonb < idx )
             break;
+        // 得到last_nonb以当cur_nonb为前向参考时的所有satd，并记录下来
         slicetype_frame_cost( h, a, frames, cur_nonb, last_nonb, last_nonb );
         memset( frames[cur_nonb]->i_propagate_cost, 0, h->mb.i_mb_count * sizeof(uint16_t) );
-        bframes = last_nonb - cur_nonb - 1;
+        bframes = last_nonb - cur_nonb - 1;  //这一轮中有多少个B帧（两个nonb帧之间的帧的个数）
         if( h->param.i_bframe_pyramid && bframes > 1 )
         {
+            
             int middle = (bframes + 1)/2 + cur_nonb;
             slicetype_frame_cost( h, a, frames, cur_nonb, last_nonb, middle );
             memset( frames[middle]->i_propagate_cost, 0, h->mb.i_mb_count * sizeof(uint16_t) );
+            // 循环遍历每一个B帧，根据B帧的位置判断对应的前后向参考帧
+            // 此处简化只有中间的B帧可以被参考（最后计算遗传代价），其他B帧均参考非B帧和中间的一个B帧
             while( i > cur_nonb )
             {
                 int p0 = i > middle ? middle : cur_nonb;
@@ -1152,23 +1176,28 @@ static void macroblock_tree( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **fr
                 if( i != middle )
                 {
                     slicetype_frame_cost( h, a, frames, p0, p1, i );
-                    macroblock_tree_propagate( h, frames, average_duration, p0, p1, i, 0 );
+                    macroblock_tree_propagate( h, frames, average_duration, p0, p1, i, 0 );  //其他B帧不被参考，最后一个参数为0
                 }
                 i--;
             }
-            macroblock_tree_propagate( h, frames, average_duration, cur_nonb, last_nonb, middle, 1 );
+            //中间B帧可以被参考，最后一个参数为1。因为它会被其他B帧参考，参考它的帧会瓜分遗传信息给它（就需要先于它计算），所以它是最后一个计算遗传代价的B帧
+            macroblock_tree_propagate( h, frames, average_duration, cur_nonb, last_nonb, middle, 1 );  
         }
         else
         {
+            // 不存在B帧作为参考帧，那么所有B帧都以两个nonb帧作为前后向参考帧进行分析
             while( i > cur_nonb )
             {
                 slicetype_frame_cost( h, a, frames, cur_nonb, last_nonb, i );
-                macroblock_tree_propagate( h, frames, average_duration, cur_nonb, last_nonb, i, 0 );
+                macroblock_tree_propagate( h, frames, average_duration, cur_nonb, last_nonb, i, 0 );  //所有B帧都不被参考，最后一个参数为0
                 i--;
             }
         }
+        // 最后计算last_nonb的遗传代价并瓜分信息到它的参考帧上
+        // 为什么最后计算？原理用上面地可以被参考的中间B帧
         macroblock_tree_propagate( h, frames, average_duration, cur_nonb, last_nonb, last_nonb, 1 );
-        last_nonb = cur_nonb;
+        // 迭代更新，这一轮的cur_nonb是下一轮的last_nonb。（一轮一轮地，最后计算的就是第一帧）
+        last_nonb = cur_nonb;  
     }
 
     if( !h->param.rc.i_lookahead )

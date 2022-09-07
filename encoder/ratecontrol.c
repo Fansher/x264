@@ -2101,11 +2101,18 @@ static double get_diff_limited_q(x264_t *h, ratecontrol_entry_t *rce, double q, 
     return q;
 }
 
+// 在真实编码之前的码控，如何预估其可能的编码帧大小呢？主要通过satd（参数var）和qscale（参数q）来计算
+/* x264码控基本理论：bits=(satd/qscale)*coeff。satd是复杂度；coeff是一个常数系数
+** 预估与实际编码bits会有误差，因此会引入一个误差offset
+** 最终的预估bits计算公式是：bits = satd*coeff + offset）/ qscale
+** 其中offset和coeff在每次实际编码完后都会更新取值，所以会引入count计数用于计算平均（coeff、offset、count都会更新）
+*/ 
 static float predict_size( predictor_t *p, float q, float var )
 {
     return (p->coeff*var + p->offset) / (q*p->count);
 }
 
+// 每次编码完成，更新predictor_t参数（coeff、offset、count）
 static void update_predictor( predictor_t *p, float q, float var, float bits )
 {
     float range = 1.5;
@@ -2113,13 +2120,16 @@ static void update_predictor( predictor_t *p, float q, float var, float bits )
         return;
     float old_coeff = p->coeff / p->count;
     float old_offset = p->offset / p->count;
+    // 计算新的coeff(=(qscale*bits-offset)/satd)，coeff波动不能太大
     float new_coeff = X264_MAX( (bits*q - old_offset) / var, p->coeff_min );
     float new_coeff_clipped = x264_clip3f( new_coeff, old_coeff/range, old_coeff*range );
+    // 计算新的offset(=qscale*bits-coeff*satd)
     float new_offset = bits*q - new_coeff_clipped * var;
     if( new_offset >= 0 )
         new_coeff = new_coeff_clipped;
     else
         new_offset = 0;
+    // 参数衰减更新
     p->count  *= p->decay;
     p->coeff  *= p->decay;
     p->offset *= p->decay;
@@ -2234,10 +2244,12 @@ static void update_vbv_plan( x264_t *h, int overhead )
 }
 
 // apply VBV constraints and clip qscale to between lmin and lmax
+// 对qscale进行vbv校验，并clip到给定范围中
+// 该函数是进行帧级别的qscale调整
 static double clip_qscale( x264_t *h, int pict_type, double q )
 {
     x264_ratecontrol_t *rcc = h->rc;
-    double lmin = rcc->lmin[pict_type];
+    double lmin = rcc->lmin[pict_type];  // 不同的帧类型，qscale约束的取值范围不一样
     double lmax = rcc->lmax[pict_type];
     if( rcc->rate_factor_max_increment )
         lmax = X264_MIN( lmax, qp2qscale( rcc->qp_novbv + rcc->rate_factor_max_increment ) );
@@ -2246,6 +2258,7 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
     /* B-frames are not directly subject to VBV,
      * since they are controlled by the P-frames' QPs. */
 
+    // 主体代码在这个if中，只有使用vbv才会调用。而具体又有lookahead和old两种决策算法！
     if( rcc->b_vbv && rcc->last_satd > 0 )
     {
         double fenc_cpb_duration = (double)h->fenc->i_cpb_duration *
@@ -2253,15 +2266,20 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
         /* Lookahead VBV: raise the quantizer as necessary such that no frames in
          * the lookahead overflow and such that the buffer is in a reasonable state
          * by the end of the lookahead. */
-        if( h->param.rc.i_lookahead )
+        if( h->param.rc.i_lookahead ) // 在vbv的情况下使用lookahead
         {
-            int terminate = 0;
+            int terminate = 0; // 用于循环跳出的条件
+            // terminate = 0： 既没有进行qscale*=1.01，使得buffer下溢，也没有进行qscale/=1.01，使得buffer上溢
+            // terminate = 1： 只进行了qscale*=1.01，使得buffer不断下溢
+            // terminate = 2： 只进行了qscale/=1.01，使得buffer不断上溢
+            // terminate = 3： 即进行了qscale*=1.01，使得buffer下溢，又进行了qscale/=1.01，使得buffer上溢，这时应该终止循环判断。
 
             /* Avoid an infinite loop. */
             for( int iterations = 0; iterations < 1000 && terminate != 3; iterations++ )
             {
                 double frame_q[3];
-                double cur_bits = predict_size( &rcc->pred[h->sh.i_type], q, rcc->last_satd );
+                double cur_bits = predict_size( &rcc->pred[h->sh.i_type], q, rcc->last_satd );  // 预估当前帧的bits
+                // 当前帧编码完后，buffer充盈度。rcc->buffer_fill表示编码当前帧剩下的buffer充盈度
                 double buffer_fill_cur = rcc->buffer_fill - cur_bits;
                 double target_fill;
                 double total_duration = 0;
@@ -2273,6 +2291,8 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
                 /* Loop over the planned future frames. */
                 for( int j = 0; buffer_fill_cur >= 0 && buffer_fill_cur <= rcc->buffer_size; j++ )
                 {
+                    // 模拟注入buffer：以vbv_max_rate码率持续last_duration时间填充buffer
+                    // vbv_max_rate由用户设置，表示编码时允许的最大码率
                     total_duration += last_duration;
                     buffer_fill_cur += rcc->vbv_max_rate * last_duration;
                     int i_type = h->fenc->i_planned_type[j];
@@ -2280,11 +2300,16 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
                     if( i_type == X264_TYPE_AUTO )
                         break;
                     i_type = IS_X264_TYPE_I( i_type ) ? SLICE_TYPE_I : IS_X264_TYPE_B( i_type ) ? SLICE_TYPE_B : SLICE_TYPE_P;
+                    // 模拟流出buffer：buffer_fill_cur减去预估bits
                     cur_bits = predict_size( &rcc->pred[i_type], frame_q[i_type], i_satd );
                     buffer_fill_cur -= cur_bits;
                     last_duration = h->fenc->f_planned_cpb_duration[j];
                 }
+                // 最后，buffer_fill_cur即为lookahead队列模拟后，buffer还剩下的充盈度
+                // vbv的目的就是需要使得这个剩下的充盈度buffer_fill_cur在一定范围内：
+
                 /* Try to get to get the buffer at least 50% filled, but don't set an impossible goal. */
+                // 计算下限：剩下的充盈度不能低于这个值。如果低于这个值，表示上述模拟流出buffer的过程太快（bits太大），此时需要增大qscale
                 target_fill = X264_MIN( rcc->buffer_fill + total_duration * rcc->vbv_max_rate * 0.5, rcc->buffer_size * 0.5 );
                 if( buffer_fill_cur < target_fill )
                 {
@@ -2293,6 +2318,7 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
                     continue;
                 }
                 /* Try to get the buffer no more than 80% filled, but don't set an impossible goal. */
+                // 计算上限：剩下的充盈度不能高于这个值。如果高于这个值，表示上述模拟流出buffer的过程太慢（bits太小），此时需要减小qscale
                 target_fill = x264_clip3f( rcc->buffer_fill - total_duration * rcc->vbv_max_rate * 0.5, rcc->buffer_size * 0.8, rcc->buffer_size );
                 if( rcc->b_vbv_min_rate && buffer_fill_cur > target_fill )
                 {
@@ -2304,8 +2330,9 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
             }
         }
         /* Fallback to old purely-reactive algorithm: no lookahead. */
-        else
+        else // 在vbv的情况下，不使用lookahead
         {
+            // 在编码当前帧之前，如果当前剩余充盈度不到（buffer_size）一半。这时应该增大qscale，避免编码当前帧的bits太大导致剩余充盈度不够
             if( ( pict_type == SLICE_TYPE_P ||
                 ( pict_type == SLICE_TYPE_I && rcc->last_non_b_pict_type == SLICE_TYPE_I ) ) &&
                 rcc->buffer_fill/rcc->buffer_size < 0.5 )
@@ -2315,18 +2342,20 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
 
             /* Now a hard threshold to make sure the frame fits in VBV.
              * This one is mostly for I-frames. */
-            double bits = predict_size( &rcc->pred[h->sh.i_type], q, rcc->last_satd );
+            double bits = predict_size( &rcc->pred[h->sh.i_type], q, rcc->last_satd ); // 预估当前帧bits
             /* For small VBVs, allow the frame to use up the entire VBV. */
             double max_fill_factor = h->param.rc.i_vbv_buffer_size >= 5*h->param.rc.i_vbv_max_bitrate / rcc->fps ? 2 : 1;
             /* For single-frame VBVs, request that the frame use up the entire VBV. */
             double min_fill_factor = rcc->single_frame_vbv ? 1 : 2;
 
+            // 如果预估bits*最大填充因子大于剩余buffer充盈度，则需要增大qscale，目的是减小编码码率
             if( bits > rcc->buffer_fill/max_fill_factor )
             {
                 double qf = x264_clip3f( rcc->buffer_fill/(max_fill_factor*bits), 0.2, 1.0 );
                 q /= qf;
                 bits *= qf;
             }
+            // 如果预估bits*最小填充因子小于剩余buffer充盈度，则需要减小qscale，目的是增大编码码率
             if( bits < rcc->buffer_rate/min_fill_factor )
             {
                 double qf = x264_clip3f( bits*min_fill_factor/rcc->buffer_rate, 0.001, 1.0 );
@@ -2391,12 +2420,14 @@ static double clip_qscale( x264_t *h, int pict_type, double q )
 }
 
 // update qscale for 1 frame based on actual bits used so far
+// 基于到目前为止实际使用的比特开销来确定当前帧的qscale
 static float rate_estimate_qscale( x264_t *h )
 {
     float q;
     x264_ratecontrol_t *rcc = h->rc;
     ratecontrol_entry_t rce = {0};
     int pict_type = h->sh.i_type;
+    // i_frame_size[ SLICE_TYPE_I/ SLICE_TYPE_P/ SLICE_TYPE_B]分别表示各类型slice所编码的总比特数
     int64_t total_bits = 8*(h->stat.i_frame_size[SLICE_TYPE_I]
                           + h->stat.i_frame_size[SLICE_TYPE_P]
                           + h->stat.i_frame_size[SLICE_TYPE_B])
@@ -2465,6 +2496,7 @@ static float rate_estimate_qscale( x264_t *h )
         double predicted_bits = total_bits;
         if( h->i_thread_frames > 1 )
         {
+            // 在多线程情况下，因为线程池中还没编完的帧的编码顺序在当前帧之前，所以需要先预测这些帧的bits大小
             int j = rcc - h->thread[0]->rc;
             for( int i = 1; i < h->i_thread_frames; i++ )
             {
@@ -2472,7 +2504,7 @@ static float rate_estimate_qscale( x264_t *h )
                 double bits = t->rc->frame_size_planned;
                 if( !t->b_thread_active )
                     continue;
-                bits = X264_MAX(bits, t->rc->frame_size_estimated);
+                bits = X264_MAX(bits, t->rc->frame_size_estimated);  // 用预估帧大小表示实际编码帧的大小
                 predicted_bits += bits;
             }
         }
@@ -2541,7 +2573,8 @@ static float rate_estimate_qscale( x264_t *h )
 
             double wanted_bits, overflow = 1;
 
-            rcc->last_satd = x264_rc_analyse_slice( h );
+            rcc->last_satd = x264_rc_analyse_slice( h );  // 分析当前帧的satd
+            // 截止到当前帧的累计复杂度之和、用于计算复杂度的累计帧之和。两者都有衰减权重计算
             rcc->short_term_cplxsum *= 0.5;
             rcc->short_term_cplxcount *= 0.5;
             rcc->short_term_cplxsum += rcc->last_satd / (CLIP_DURATION(h->fenc->f_duration) / BASE_FRAME_DURATION);
@@ -2559,10 +2592,13 @@ static float rate_estimate_qscale( x264_t *h )
 
             if( h->param.rc.i_rc_method == X264_RC_CRF )
             {
+                // CRF码控下的ratefactor由参数确定，为一个固定值。(crf就没有考虑码率波动的情况去调整qscale)
                 q = get_qscale( h, &rce, rcc->rate_factor_constant, h->fenc->i_frame );
             }
             else
             {
+                // 否则，在非crf模式下，根据码率溢出情况，动态调整qscale。
+                // ratefactor=wanted_bits_window/cplxr_sum
                 q = get_qscale( h, &rce, rcc->wanted_bits_window / rcc->cplxr_sum, h->fenc->i_frame );
 
                 /* ABR code can potentially be counterproductive in CBR, so just don't bother.

@@ -14,6 +14,10 @@ Shift Media Project aims to provide native Windows development libraries for x26
 
 A free software library and application for encoding video streams into the H.264/MPEG-4 AVC format. [https://www.videolan.org/developers/x264.html](https://www.videolan.org/developers/x264.html)
 
+## Descriptions
+
+Add some descriptions in some codes to improve understanding x264
+
 ## Downloads
 
 Development libraries are available from the [releases](https://github.com/ShiftMediaProject/x264/releases) page. These libraries are available for each supported Visual Studio version with a different download for each version. Each download contains both static and dynamic libraries to choose from in both 32bit and 64bit versions.

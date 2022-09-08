@@ -1504,6 +1504,7 @@ void x264_ratecontrol_start( x264_t *h, int i_force_qp, int overhead )
     }
     else /* CQP */
     {
+        // 作为可被参考的B帧，其qp值由B帧和P帧决定（取平均值），其他情况则是B帧固定值
         if( h->sh.i_type == SLICE_TYPE_B && h->fdec->b_kept_as_ref )
             q = ( rc->qp_constant[ SLICE_TYPE_B ] + rc->qp_constant[ SLICE_TYPE_P ] ) / 2;
         else

@@ -950,7 +950,9 @@ static int validate_parameters( x264_t *h, int b_open )
     }
     if( h->param.rc.i_rc_method == X264_RC_CQP )
     {
+        // CQP模式下传参进来的qp对应的是P帧的qp值
         float qp_p = h->param.rc.i_qp_constant;
+        // I帧和B帧的qp由P帧和对应的factor计算得到
         float qp_i = qp_p - 6*log2f( h->param.rc.f_ip_factor );
         float qp_b = qp_p + 6*log2f( h->param.rc.f_pb_factor );
         if( qp_p < 0 )
@@ -961,7 +963,7 @@ static int validate_parameters( x264_t *h, int b_open )
 
         h->param.rc.i_qp_min = x264_clip3( (int)(X264_MIN3( qp_p, qp_i, qp_b )), 0, QP_MAX );
         h->param.rc.i_qp_max = x264_clip3( (int)(X264_MAX3( qp_p, qp_i, qp_b ) + .999), 0, QP_MAX );
-        h->param.rc.i_aq_mode = 0;
+        h->param.rc.i_aq_mode = 0; // CQP下不存在mbtree和aq码控算法
         h->param.rc.b_mb_tree = 0;
         h->param.rc.i_bitrate = 0;
     }

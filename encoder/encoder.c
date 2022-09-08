@@ -2050,6 +2050,7 @@ static int check_encapsulated_buffer( x264_t *h, x264_t *h0, int start,
     return 0;
 }
 
+// 封装一帧数据（或者SPS、PPS）对应的NALU（添加起始码、防竞争机制等等），该函数会调用x264_nal_encode()
 static int encoder_encapsulate_nals( x264_t *h, int start )
 {
     x264_t *h0 = h->thread[0];
@@ -2079,6 +2080,7 @@ static int encoder_encapsulate_nals( x264_t *h, int start )
 
     uint8_t *nal_buffer = h0->nal_buffer + previous_nal_size;
 
+    // 如果有多个nalu，则一个一个地进行处理
     for( int i = start; i < h->out.i_nal; i++ )
     {
         h->out.nal[i].b_long_startcode = !i || h->out.nal[i].i_type == NAL_SPS || h->out.nal[i].i_type == NAL_PPS ||

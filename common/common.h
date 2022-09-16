@@ -274,7 +274,7 @@ struct x264_t
     /* opaque pointer to bit depth independent interface */
     void            *api;
 
-    x264_t          *thread[X264_THREAD_MAX+1];
+    x264_t          *thread[X264_THREAD_MAX+1];  // x264支持的最大线程数是128
     x264_t          *lookahead_thread[X264_LOOKAHEAD_THREAD_MAX];
     int             b_thread_active;
     int             i_thread_phase; /* which thread to use for the next frame */

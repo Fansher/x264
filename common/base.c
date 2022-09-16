@@ -348,7 +348,7 @@ REALIGN_STACK void x264_param_default( x264_param_t *param )
 
     /* CPU autodetect */
     param->cpu = x264_cpu_detect();
-    param->i_threads = X264_THREADS_AUTO;
+    param->i_threads = X264_THREADS_AUTO;  // 默认情况下都是根据机器核数自动选择最优的线程数
     param->i_lookahead_threads = X264_THREADS_AUTO;
     param->b_deterministic = 1;
     param->i_sync_lookahead = X264_SYNC_LOOKAHEAD_AUTO;

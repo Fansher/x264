@@ -665,11 +665,12 @@ static void mb_analyse_intra_chroma( x264_t *h, x264_mb_analysis_t *a )
 }
 
 /* FIXME: should we do any sort of merged chroma analysis with 4:4:4? */
+// 宏块帧内预测：对亮度而言，一个16x16的块，要么划分为16个4x4的小块，要么不划分；不存在其他划分情况
 static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter )
 {
     const unsigned int flags = h->sh.i_type == SLICE_TYPE_I ? h->param.analyse.intra : h->param.analyse.inter;
-    pixel *p_src = h->mb.pic.p_fenc[0];
-    pixel *p_dst = h->mb.pic.p_fdec[0];
+    pixel *p_src = h->mb.pic.p_fenc[0];  // 源数据，此处是要编码数据
+    pixel *p_dst = h->mb.pic.p_fdec[0];  // 重构数据，此处是被参考数据
     static const int8_t intra_analysis_shortcut[2][2][2][5] =
     {
         {{{I_PRED_4x4_HU, -1, -1, -1, -1},
@@ -687,8 +688,18 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
 
     /*---------------- Try all mode and calculate their score ---------------*/
     /* Disabled i16x16 for AVC-Intra compat */
+    // 16x16帧内预测选择，此时宏块不需要进行划分。16x16最多4种预测模式可用
     if( !h->param.i_avcintra_class )
     {
+        // 检查当前宏块有哪些预测模式是有效可用的，存储在predict_mode（指向下面二位数据中的某一维）
+        //static const int8_t i16x16_mode_available[5][5] =
+        //{
+        //    {I_PRED_16x16_DC_128, -1, -1, -1, -1},                                          //no neighbors
+        //    {I_PRED_16x16_DC_LEFT, I_PRED_16x16_H, -1, -1, -1},                             //only left neighbors
+        //    {I_PRED_16x16_DC_TOP, I_PRED_16x16_V, -1, -1, -1},                              //only top neighbors        
+        //    {I_PRED_16x16_V, I_PRED_16x16_H, I_PRED_16x16_DC, -1, -1},                      //top and left neighbors
+        //    {I_PRED_16x16_V, I_PRED_16x16_H, I_PRED_16x16_DC, I_PRED_16x16_P, -1},          //top and left and topleft neighbors
+        //};
         const int8_t *predict_mode = predict_16x16_mode_available( h->mb.i_neighbour_intra );
 
         /* Not heavily tuned */
@@ -697,6 +708,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
 
         if( !h->mb.b_lossless && predict_mode[3] >= 0 )
         {
+            // 存在V、H、DC预测模式的话，就一起快速计算
             h->pixf.intra_mbcmp_x3_16x16( p_src, p_dst, a->i_satd_i16x16_dir );
             a->i_satd_i16x16_dir[0] += lambda * bs_size_ue(0);
             a->i_satd_i16x16_dir[1] += lambda * bs_size_ue(1);
@@ -706,6 +718,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
             COPY2_IF_LT( a->i_satd_i16x16, a->i_satd_i16x16_dir[2], a->i_predict16x16, 2 );
 
             /* Plane is expensive, so don't check it unless one of the previous modes was useful. */
+            // 只有当上面的最优预测模式比阈值小，才进行Plane预测模式分析
             if( a->i_satd_i16x16 <= i16x16_thresh )
             {
                 h->predict_16x16[I_PRED_16x16_P]( p_dst );
@@ -716,6 +729,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
         }
         else
         {
+            // 依次遍历每个可用的预测模式进行分析
             for( ; *predict_mode >= 0; predict_mode++ )
             {
                 int i_satd;
@@ -862,6 +876,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
     }
 
     /* 4x4 prediction selection */
+    // 4x4帧内预测选择。此时宏块被划分成16个4x4的小块，每个小块都需要做分析。4x4最多9种预测模式可用
     if( flags & X264_ANALYSE_I4x4 )
     {
         int i_cost = lambda * (24+16); /* 24from JVT (SATD0), 16 from base predmode costs */
@@ -874,12 +889,12 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
         if( h->sh.i_type == SLICE_TYPE_B )
             i_cost += lambda * i_mb_b_cost_table[I_4x4];
 
-        for( idx = 0;; idx++ )
+        for( idx = 0;; idx++ )  // 循环所有的小块
         {
             pixel *p_src_by = p_src + block_idx_xy_fenc[idx];
             pixel *p_dst_by = p_dst + block_idx_xy_fdec[idx];
             int i_best = COST_MAX;
-            int i_pred_mode = x264_mb_predict_intra4x4_mode( h, idx );
+            int i_pred_mode = x264_mb_predict_intra4x4_mode( h, idx );  // 当前小块可用的预测模式
 
             const int8_t *predict_mode = predict_4x4_mode_available( a->b_avoid_topright, h->mb.i_neighbour4[idx], idx );
 
@@ -890,6 +905,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
             if( h->pixf.intra_mbcmp_x9_4x4 && predict_mode[8] >= 0 )
             {
                 /* No shortcuts here. The SSSE3 implementation of intra_mbcmp_x9 is fast enough. */
+                // 9种模式都可用时，使用快速算法分析
                 i_best = h->pixf.intra_mbcmp_x9_4x4( p_src_by, p_dst_by, cost_i4x4_mode-i_pred_mode );
                 i_cost += i_best & 0xffff;
                 i_best >>= 16;
@@ -902,6 +918,7 @@ static void mb_analyse_intra( x264_t *h, x264_mb_analysis_t *a, int i_satd_inter
             {
                 if( !h->mb.b_lossless && predict_mode[5] >= 0 )
                 {
+                    // 至少6种模式可用的话：前面3种模式使用快速算法，后面的可用模式再循环遍历
                     ALIGNED_ARRAY_16( int32_t, satd,[4] );
                     h->pixf.intra_mbcmp_x3_4x4( p_src_by, p_dst_by, satd );
                     int favor_vertical = satd[I_PRED_4x4_H] > satd[I_PRED_4x4_V];

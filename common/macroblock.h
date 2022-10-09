@@ -68,7 +68,7 @@ enum mb_class_e
     I_16x16         = 2,
     I_PCM           = 3,
 
-    P_L0            = 4,
+    P_L0            = 4,  // P宏块类型
     P_8x8           = 5,
     P_SKIP          = 6,
 

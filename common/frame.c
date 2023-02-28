@@ -640,13 +640,16 @@ void x264_frame_expand_border_mod16( x264_t *h, x264_frame_t *frame )
 {
     for( int i = 0; i < frame->i_plane; i++ )
     {
-        int i_width = h->param.i_width;
+        int i_width = h->param.i_width;  //图像真实宽
         int h_shift = i && CHROMA_H_SHIFT;
         int v_shift = i && CHROMA_V_SHIFT;
         int i_height = h->param.i_height >> v_shift;
-        int i_padx = (h->mb.i_mb_width * 16 - h->param.i_width);
-        int i_pady = (h->mb.i_mb_height * 16 - h->param.i_height) >> v_shift;
+        //宽需要padding的位数
+        int i_padx = (h->mb.i_mb_width * 16 - h->param.i_width);  
+        //高需要padding的位数。注意：高度的padding有考虑UV通道的不同，而上面宽度的padding没有
+        int i_pady = (h->mb.i_mb_height * 16 - h->param.i_height) >> v_shift;  
 
+        //在原始像素的右侧和下侧进行padding
         if( i_padx )
         {
             for( int y = 0; y < i_height; y++ )
@@ -768,17 +771,23 @@ x264_frame_t *x264_frame_shift( x264_frame_t **list )
     return frame;
 }
 
+//把当前帧frame放入unused[]队列
 void x264_frame_push_unused( x264_t *h, x264_frame_t *frame )
 {
     assert( frame->i_reference_count > 0 );
     frame->i_reference_count--;
+    //注意：每个线程都有自己的x264_t 上下文，每调用一次这个函数，frame被引用的次数减1，直到为0,这个时候frame就可以被释放了。
+    //同时也不是对内存进行释放，而是把frame重新回收到上下文的unused队列，供下次使用
     if( frame->i_reference_count == 0 )
         x264_frame_push( h->frames.unused[frame->b_fdec], frame );
 }
 
+//从unused[]队列中取出一个帧内存使用，根据b_fdec判断是enc还是dec
 x264_frame_t *x264_frame_pop_unused( x264_t *h, int b_fdec )
 {
     x264_frame_t *frame;
+    //从unused[]队列中Pop出一个内存地址出来（前面x264_frame_push_unused释放的内存会回收到unused[]中）
+    //如果不存在，则new一个内存空间出来
     if( h->frames.unused[b_fdec][0] )
         frame = x264_frame_pop( h->frames.unused[b_fdec] );
     else

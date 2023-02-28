@@ -374,8 +374,10 @@ struct x264_t
 
     struct
     {
+        //已经确定帧类型的待编码帧队列（每一个GOP在编码前，每一帧的类型在编码前已经确定）
         /* Frames to be encoded (whose types have been decided) */
         x264_frame_t **current;
+        //unused[]数组用于回收那些在编码过程中分配的frame空间（这些空间会重复利用）
         /* Unused frames: 0 = fenc, 1 = fdec */
         x264_frame_t **unused[2];
 

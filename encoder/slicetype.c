@@ -1100,6 +1100,8 @@ static void macroblock_tree_propagate( x264_t *h, x264_frame_t **frames, float a
         macroblock_tree_finish( h, frames[b], average_duration, b == p1 ? b - p0 : 0 );
 }
 
+//一句话了解mbtree原理：根据被参考mb块在帧间预测中贡献给未来帧的信息，来调整该宏块的量化值
+//mbtree入口函数，该函数唯一被x264_slicetype_analyse调用，也即在确定帧类型后进行mbtree分析
 static void macroblock_tree( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **frames, int num_frames, int b_intra )
 {
     int idx = !b_intra;
@@ -1143,6 +1145,7 @@ static void macroblock_tree( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **fr
         memset( frames[last_nonb]->i_propagate_cost, 0, h->mb.i_mb_count * sizeof(uint16_t) );
     }
 
+    //mbtree中的传递关系不跨minigop，连续的两个nonb作为一个minigop单独计算
     //lookahead队列：
     //			              nonb  ......  nonb	......	   nonb	  ......	 nonb	 ......
     //	round1:							                           cur_nonb    ...	 last_nonb

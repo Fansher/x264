@@ -1499,6 +1499,9 @@ static int scenecut( x264_t *h, x264_mb_analysis_t *a, x264_frame_t **frames, in
 #define IS_X264_TYPE_AUTO_OR_I(x) ((x)==X264_TYPE_AUTO || IS_X264_TYPE_I(x))
 #define IS_X264_TYPE_AUTO_OR_B(x) ((x)==X264_TYPE_AUTO || IS_X264_TYPE_B(x))
 
+//对lookahead队列中的帧进行分析，确定他们的帧类型
+//该函数被调用的流程是：
+//x264_encoder_encode --> x264_lookahead_get_frames --> x264_slicetype_decide --> x264_slicetype_analyse
 void x264_slicetype_analyse( x264_t *h, int intra_minigop )
 {
     x264_mb_analysis_t a;
@@ -1516,14 +1519,18 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
 
     assert( h->frames.b_have_lowres );
 
+    //lookahead帧类型分析第一帧需要上一个非B帧，如果不存在则直接返回
     if( !h->lookahead->last_nonb )
         return;
+    //frames[]用于存储待分析帧类型帧，
+    //其中第一帧frames[0]存储上一个非B帧，frames[1~i_max_search]存储本次待确认帧类型的帧（实际后面还会调整一次待分析总帧数）
     frames[0] = h->lookahead->last_nonb;
     for( framecnt = 0; framecnt < i_max_search; framecnt++ )
         frames[framecnt+1] = h->lookahead->next.list[framecnt];
 
     lowres_context_init( h, &a );
 
+    //framecnt为0说明所有帧的帧类型均已确认，mbtree分析后退出
     if( !framecnt )
     {
         if( h->param.rc.b_mb_tree )
@@ -1531,7 +1538,11 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
         return;
     }
 
+    //keyint_limit = h->param.i_keyint_max - (frames[0]->i_frame - h->lookahead->i_last_keyframe) - 1;
+    //keyint_limit表示截止到上一个非B帧，到下一个关键帧的最大距离。也就是说在这个距离内必须得有一个关键帧，否则就需要强制插入
     keyint_limit = h->param.i_keyint_max - frames[0]->i_frame + h->lookahead->i_last_keyframe - 1;
+    //根据上一行代码，待帧类型分析的帧数就不能超过keyint_limit
+    //num_frames就是确定要帧类型分析的帧数
     orig_num_frames = num_frames = h->param.b_intra_refresh ? framecnt : X264_MIN( framecnt, keyint_limit );
 
     /* This is important psy-wise: if we have a non-scenecut keyframe,
@@ -1548,6 +1559,7 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
         return;
     }
 
+    //初次场景切换判断第一帧是否是关键帧
     if( IS_X264_TYPE_AUTO_OR_I( frames[1]->i_type ) &&
         h->param.i_scenecut_threshold && scenecut( h, &a, frames, 0, 1, 1, orig_num_frames, i_max_search ) )
     {
@@ -1556,11 +1568,16 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
         return;
     }
 
+    //为什么以上2处在确定一个关键帧后就直接return？
+    //lookahead以minigop为单位进行帧类型分析，既然第一帧是关键帧，说明可以把单独的I帧作为minigop输出，并结束这一轮帧类型分析
+    //这时，当前这个关键帧就成为下一次帧类型分析的last_nonb（lookahead->last_nonb）
+
 #if HAVE_OPENCL
     x264_opencl_slicetype_prep( h, frames, num_frames, a.i_lambda );
 #endif
 
     /* Replace forced keyframes with I/IDR-frames */
+    //确认关键帧是IDR帧还是I帧，此时的帧类型可能是随yuv数据一并传入codec
     for( int j = 1; j <= num_frames; j++ )
     {
         if( frames[j]->i_type == X264_TYPE_KEYFRAME )
@@ -1568,6 +1585,7 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
     }
 
     /* Close GOP at IDR-frames */
+    //一旦有一个IDR帧，那么IDR前一帧的帧类型是P帧
     for( int j = 2; j <= num_frames; j++ )
     {
         if( frames[j]->i_type == X264_TYPE_IDR && IS_X264_TYPE_AUTO_OR_B( frames[j-1]->i_type ) )
@@ -1579,6 +1597,10 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
 
     if( h->param.i_bframe )
     {
+        //允许B帧，根据i_bframe_adaptive进行自适应B帧设置（ultrafast使用NONE，slower及以下使用TRELLIS，其他preset使用FAST）
+        //X264_B_ADAPT_TRELLIS：最佳判别方法
+        //X264_B_ADAPT_FAST：快速判断方法
+        //X264_B_ADAPT_NONE：不使用自适应方法
         if( h->param.i_bframe_adaptive == X264_B_ADAPT_TRELLIS )
         {
             if( num_frames > 1 )
@@ -1651,30 +1673,33 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
         }
         else
         {
-            int num_bframes = h->param.i_bframe;
+            int num_bframes = h->param.i_bframe; //最大连续B帧数，我们称之为占坑数 
             for( int j = 1; j < num_frames; j++ )
             {
                 if( !num_bframes )
                 {
+                    //如果没有坑位了，当前帧设置为P帧，后续会更新坑位数
                     if( IS_X264_TYPE_AUTO_OR_B( frames[j]->i_type ) )
                         frames[j]->i_type = X264_TYPE_P;
                 }
                 else if( frames[j]->i_type == X264_TYPE_AUTO )
                 {
+                    //还有坑位，这儿没理解，为什么下一帧是B帧，当前帧就要设置为P帧？？？
                     if( IS_X264_TYPE_B( frames[j+1]->i_type ) )
                         frames[j]->i_type = X264_TYPE_P;
                     else
                         frames[j]->i_type = X264_TYPE_B;
                 }
                 if( IS_X264_TYPE_B( frames[j]->i_type ) )
-                    num_bframes--;
+                    num_bframes--;  //当前帧是B帧，就占据一个坑位
                 else
-                    num_bframes = h->param.i_bframe;
+                    num_bframes = h->param.i_bframe;  //否则，坑位数更新为最大连续B帧数
             }
         }
         if( IS_X264_TYPE_AUTO_OR_B( frames[num_frames]->i_type ) )
             frames[num_frames]->i_type = X264_TYPE_P;
 
+        //可以理解为第一个minigop对应的连续B帧数
         int num_bframes = 0;
         while( num_bframes < num_frames && IS_X264_TYPE_B( frames[num_bframes+1]->i_type ) )
             num_bframes++;
@@ -1695,6 +1720,7 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
     }
     else
     {
+        //不设置B帧的情况下，如果不是I帧，就均设置为P帧
         for( int j = 1; j <= num_frames; j++ )
             if( IS_X264_TYPE_AUTO_OR_B( frames[j]->i_type ) )
                 frames[j]->i_type = X264_TYPE_P;
@@ -1771,6 +1797,7 @@ void x264_slicetype_analyse( x264_t *h, int intra_minigop )
 #endif
 }
 
+//帧类型决策
 void x264_slicetype_decide( x264_t *h )
 {
     x264_frame_t *frames[X264_BFRAME_MAX+2];
@@ -1778,6 +1805,7 @@ void x264_slicetype_decide( x264_t *h )
     int bframes;
     int brefs;
 
+    //当lookahead队列为空时，直接返回
     if( !h->lookahead->next.i_size )
         return;
 

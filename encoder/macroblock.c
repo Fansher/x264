@@ -985,6 +985,7 @@ void x264_macroblock_encode( x264_t *h )
  * x264_macroblock_probe_skip:
  *  Check if the current MB could be encoded as a [PB]_SKIP
  *****************************************************************************/
+//SKIP模式：没有像素残差，也没有运动矢量残差(mvd)。解码利用mvp得到预测像素值，预测像素值=重构像素值
 static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir, int plane_count, int chroma )
 {
     ALIGNED_ARRAY_64( dctcoef, dct4x4,[8],[16] );
@@ -992,9 +993,11 @@ static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir,
     ALIGNED_4( int16_t mvp[2] );
     int i_qp = h->mb.i_qp;
 
+    //亮度，plane_count只有在YUV444格式时为3，其他格式均为1
     for( int p = 0; p < plane_count; p++, i_qp = h->mb.i_chroma_qp )
     {
         int quant_cat = p ? CQM_4PC : CQM_4PY;
+        //得到预测矢量mvp，利用mvp进行运动补偿
         if( !b_bidir )
         {
             /* Get the MV */
@@ -1007,6 +1010,9 @@ static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir,
                            mvp[0], mvp[1], 16, 16, &h->sh.weight[0][p] );
         }
 
+        //进行dct变换：对每个8x8块中的4x4进行量化，zigzag扫描，得到8x8块的i_decimate_mb值。
+        //如果量化后系数中只有零星的非零系数，且都是-1或1，则i_decimate_mb就比较小。
+        //i_decimate_mb如果大于5，说明系数较大，不能skip；否则可以将系数全部置0，走skip。
         for( int i8x8 = 0, i_decimate_mb = 0; i8x8 < 4; i8x8++ )
         {
             int fenc_offset = (i8x8&1) * 8 + (i8x8>>1) * FENC_STRIDE * 8;
@@ -1030,6 +1036,7 @@ static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir,
         }
     }
 
+    //色度
     if( chroma == CHROMA_420 || chroma == CHROMA_422 )
     {
         i_qp = h->mb.i_chroma_qp;
@@ -1108,6 +1115,9 @@ static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir,
                 }
 
             /* calculate dct coeffs */
+            //进行dct变换：对每个8x8块中的4x4进行量化，zigzag扫描，得到8x8块的i_decimate_mb值。
+            //如果量化后系数中只有零星的非零系数，且都是-1或1，则i_decimate_mb就比较小。
+            //i_decimate_mb如果大于6，说明系数较大，不能skip；否则可以将系数全部置0，走skip。
             for( int i8x8 = 0, i_decimate_mb = 0; i8x8 < (chroma422?2:1); i8x8++ )
             {
                 int nz = h->quantf.quant_4x4x4( &dct4x4[i8x8*4], h->quant4_mf[CQM_4PC][i_qp], h->quant4_bias[CQM_4PC][i_qp] );
@@ -1126,6 +1136,7 @@ static ALWAYS_INLINE int macroblock_probe_skip_internal( x264_t *h, int b_bidir,
     return 1;
 }
 
+//判断当前块是否可以预测为SKIP模式，参数b_bidir表示是否是双向参考，1表示双向参考
 int x264_macroblock_probe_skip( x264_t *h, int b_bidir )
 {
     if( CHROMA_FORMAT == CHROMA_420 )

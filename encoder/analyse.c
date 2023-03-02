@@ -1270,6 +1270,7 @@ static void intra_rd_refine( x264_t *h, x264_mb_analysis_t *a )
     (a->p_cost_ref[list][ref])
 
 // 用于16x16大小宏块的帧间预测分析
+//在H264中，每一个16x16的宏块有4种分割方式：一个16x16；两个8x16；两个16x8；四个8x8
 static void mb_analyse_inter_p16x16( x264_t *h, x264_mb_analysis_t *a )
 {
     // 运动估计相关的信息
@@ -1280,8 +1281,8 @@ static void mb_analyse_inter_p16x16( x264_t *h, x264_mb_analysis_t *a )
     int *p_halfpel_thresh = (a->b_early_terminate && h->mb.pic.i_fref[0]>1) ? &i_halfpel_thresh : NULL;
 
     /* 16x16 Search on all ref frame */
-    m.i_pixel = PIXEL_16x16;
-    LOAD_FENC( &m, h->mb.pic.p_fenc, 0, 0 );
+    m.i_pixel = PIXEL_16x16;  //当前块大小
+    LOAD_FENC( &m, h->mb.pic.p_fenc, 0, 0 );  //加载当前块，0,0是因为16x16块未被划分，偏移坐标点即为原点
 
     a->l0.me16x16.cost = INT_MAX;
     // 循环搜索所有参考帧（mb.pic.i_fref[0]存储了参考帧的个数）
@@ -1295,7 +1296,7 @@ static void mb_analyse_inter_p16x16( x264_t *h, x264_mb_analysis_t *a )
         LOAD_HPELS( &m, h->mb.pic.p_fref[0][i_ref], 0, i_ref, 0, 0 );
         LOAD_WPELS( &m, h->mb.pic.p_fref_w[i_ref], 0, i_ref, 0, 0 );
 
-        // 获取预测的运动矢量mvp
+        // 获取预测的运动矢量mvp（相邻块mv取中值得到）
         x264_mb_predict_mv_16x16( h, 0, i_ref, m.mvp );
 
         if( h->mb.ref_blind_dupe == i_ref )
@@ -1309,6 +1310,7 @@ static void mb_analyse_inter_p16x16( x264_t *h, x264_mb_analysis_t *a )
             // 关键一步：运动搜索，找到mv
             x264_me_search_ref( h, &m, mvc, i_mvc, p_halfpel_thresh );
         }
+        //以上两步得到mvp和mv，两者的差值为mvd
 
         /* save mv for predicting neighbors */
         CP32( h->mb.mvr[0][i_ref][h->mb.i_mb_xy], m.mv );

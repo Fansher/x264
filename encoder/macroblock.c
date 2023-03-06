@@ -123,12 +123,16 @@ static ALWAYS_INLINE int array_non_zero( dctcoef *v, int i_count )
 /* This means that decimation can be done merely by adjusting the CBP and NNZ
  * rather than memsetting the coefficients. */
 
+//编码16x16的帧内宏块
+//当图像块是16x16的帧内预测时，需要将4x4个4x4图像块经DCT变换后得到的直流系数DC重拍成4x4的块，再单独对这个矩阵进行Hadamard变换
 static void mb_encode_i16x16( x264_t *h, int p, int i_qp )
 {
     pixel *p_src = h->mb.pic.p_fenc[p];
     pixel *p_dst = h->mb.pic.p_fdec[p];
 
+    //dct4x4是DCT变换系数（数组，包含16个指针（对应16个4x4块），每个指针存有16个系数，对应一个4x4的DCT系数）
     ALIGNED_ARRAY_64( dctcoef, dct4x4,[16],[16] );
+    //dct_dc4x4是16x16块的Hadamard变换系数
     ALIGNED_ARRAY_64( dctcoef, dct_dc4x4,[16] );
 
     int nz, block_cbp = 0;
@@ -159,15 +163,19 @@ static void mb_encode_i16x16( x264_t *h, int p, int i_qp )
 
     CLEAR_16x16_NNZ( p );
 
+    //求原始块和重构块的残差（p_src - p_dst），然后进行DCT变换，系数保存在dct4x4
     h->dctf.sub16x16_dct( dct4x4, p_src, p_dst );
 
     if( h->mb.b_noise_reduction )
         for( int idx = 0; idx < 16; idx++ )
             h->quantf.denoise_dct( dct4x4[idx], h->nr_residual_sum[0], h->nr_offset[0], 16 );
 
+    //获取DC直流系数
     for( int idx = 0; idx < 16; idx++ )
     {
+        //获取每一个4x4DCT块的[0]元素，从block_idx_xy_1d定义看出zigzag扫描存储
         dct_dc4x4[block_idx_xy_1d[idx]] = dct4x4[idx][0];
+        //抽取出来之后，原DC直流系数赋值0
         dct4x4[idx][0] = 0;
     }
 
@@ -193,6 +201,7 @@ static void mb_encode_i16x16( x264_t *h, int p, int i_qp )
                 block_cbp = 0xf;
                 FOREACH_BIT( idx, i8x8*4, nz )
                 {
+                    //建立重构帧：之字扫描、反量化
                     h->zigzagf.scan_4x4( h->dct.luma4x4[16*p+idx], dct4x4[idx] );
                     h->quantf.dequant_4x4( dct4x4[idx], h->dequant4_mf[i_quant_cat], i_qp );
                     if( decimate_score < 6 ) decimate_score += h->quantf.decimate_score15( h->dct.luma4x4[16*p+idx] );
@@ -212,7 +221,7 @@ static void mb_encode_i16x16( x264_t *h, int p, int i_qp )
     else
         h->mb.i_cbp_luma |= block_cbp;
 
-    h->dctf.dct4x4dc( dct_dc4x4 );
+    h->dctf.dct4x4dc( dct_dc4x4 ); //16个DC系数的Hadamard变换
     if( h->mb.b_trellis )
         nz = x264_quant_luma_dc_trellis( h, dct_dc4x4, i_quant_cat, i_qp, ctx_cat_plane[DCT_LUMA_DC][p], 1, LUMA_DC+p );
     else
@@ -227,7 +236,7 @@ static void mb_encode_i16x16( x264_t *h, int p, int i_qp )
         h->dctf.idct4x4dc( dct_dc4x4 );
         h->quantf.dequant_4x4_dc( dct_dc4x4, h->dequant4_mf[i_quant_cat], i_qp );  /* XXX not inversed */
         if( block_cbp )
-            for( int i = 0; i < 16; i++ )
+            for( int i = 0; i < 16; i++ ) //把16个4x4块的DC系数重新赋值到DCT数组的[0]元素上
                 dct4x4[i][0] = dct_dc4x4[block_idx_xy_1d[i]];
     }
 

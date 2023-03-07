@@ -546,6 +546,22 @@ struct x264_t
         ALIGNED_4( uint8_t i_sub_partition[4] );
         int     b_transform_8x8;
 
+        /*
+        *CBP即coded_block_pattern，指亮度和色度分量的各小块的残差编码方案，所谓编码方案有以下几种：
+        **对所有残差系数（AC和DC）都编码；只对DC系数编码；所有残差系数（AC和DC）都不编码
+
+        *该句法元素同时隐含了一个宏块中亮度、色度分量的CBP，即CodedBlockPatternLuma和CodedBlockPatternChroma
+        **对于非Intra_16x16的宏块类型：
+        ****CodedBlockPatternLuma = coded_block_pattern % 16;
+        ****CodedBlockPatternChroma = coded_block_pattern / 16;
+        **对于Intra_16x16的宏块类型：
+        ****亮度、色度分量的CBP不是由该句法元素得到，而是通过mb_type得到。
+
+        *CodedBlockPatternLuma：16位长的变量，其中最低4位有定义。由于非Intra_16x16宏块不单独编码DC系数，所以该变量只指明两种编码方案：残差系数全部编码或全部不编码
+        *CodedBlockPatternChroma：当值为0、 1、 2时有定义。0表示所有系数不编码；1表示只编码DC系数；2表示DC和AC系数都编码
+
+        *注：所有的色度块，和16x16亮度宏块，都会单独再编码一次DC系数
+        */
         int     i_cbp_luma;
         int     i_cbp_chroma;
 

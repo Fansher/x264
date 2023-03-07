@@ -2994,6 +2994,7 @@ intra_analysis:
     }
     else if( h->sh.i_type == SLICE_TYPE_P )
     {
+        // 当是P宏块时，首先判断是否是skip模式，只有在左、上、左上、右上有一个是skip模式时，这时候mb才有可能是skip模式
         // P帧：帧内模式和帧间模式均需要分析（P帧允许有Intra宏块和P宏块），从中选择最优模式
         int b_skip = 0;
 
@@ -3054,7 +3055,7 @@ intra_analysis:
                          h->mb.i_mb_type_top == P_SKIP ||
                          h->mb.i_mb_type_topleft == P_SKIP ||
                          h->mb.i_mb_type_topright == P_SKIP )
-                    b_skip = x264_macroblock_probe_pskip( h );  // 检查是否时SKIP类型
+                    b_skip = x264_macroblock_probe_pskip( h );  // 检查是否是SKIP类型
             }
         }
 

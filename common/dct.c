@@ -42,6 +42,7 @@
 #   include "mips/dct.h"
 #endif
 
+//Hadamard变换（帧内16x16宏块的DC系数的Hadamard变换）
 static void dct4x4dc( dctcoef d[16] )
 {
     dctcoef tmp[16];

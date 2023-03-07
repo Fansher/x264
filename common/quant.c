@@ -61,6 +61,8 @@ static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64] )
     return !!nz;
 }
 
+//4x4量化，对输入的16个元素进行量化，原址输出。
+//函数返回量化系数中是否有非零值
 static int quant_4x4( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] )
 {
     int nz = 0;

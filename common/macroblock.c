@@ -876,7 +876,7 @@ static ALWAYS_INLINE void macroblock_cache_load( x264_t *h, int mb_x, int mb_y, 
     h->mb.cache.deblock_strength = h->deblock_strength[mb_y&1][h->param.b_sliced_threads?h->mb.i_mb_xy:mb_x];
 
     /* load cache */
-    if( h->mb.i_neighbour & MB_TOP )
+    if( h->mb.i_neighbour & MB_TOP ) //当前块存在上方相邻的参考像素，则加载相应信息（cbp，nnz，mv）
     {
         h->mb.cache.i_cbp_top = cbp[top];
         /* load intra4x4 */
@@ -912,7 +912,7 @@ static ALWAYS_INLINE void macroblock_cache_load( x264_t *h, int mb_x, int mb_y, 
         M32( &h->mb.cache.non_zero_count[x264_scan8[32] - 8] ) = 0x80808080U;
     }
 
-    if( h->mb.i_neighbour & MB_LEFT )
+    if( h->mb.i_neighbour & MB_LEFT ) //当前块存在左方相邻的参考像素，则加载相应信息（cbp，nnz，mv）
     {
         int ltop = left[LTOP];
         int lbot = b_mbaff ? left[LBOT] : ltop;
@@ -1337,15 +1337,21 @@ static ALWAYS_INLINE void macroblock_cache_load( x264_t *h, int mb_x, int mb_y, 
     if( h->sh.i_type == SLICE_TYPE_P )
         x264_mb_predict_mv_pskip( h, h->mb.cache.pskip_mv );
 
+    //i_neighbour8把一个宏块分成4个8x8子块
+    //i_neighbour4把一个宏块分为16个4x4子块，均按照zigzag方式编号
+    //4[0]、8[0]上、左、左上与原宏块相同；右上与原宏块是否有上有关
     h->mb.i_neighbour4[0] =
     h->mb.i_neighbour8[0] = (h->mb.i_neighbour_intra & (MB_TOP|MB_LEFT|MB_TOPLEFT))
                             | ((h->mb.i_neighbour_intra & MB_TOP) ? MB_TOPRIGHT : 0);
+    //4[4]、4[1]一定有左；左上、上、右上与原宏块是否有上有关
     h->mb.i_neighbour4[4] =
     h->mb.i_neighbour4[1] = MB_LEFT | ((h->mb.i_neighbour_intra & MB_TOP) ? (MB_TOP|MB_TOPLEFT|MB_TOPRIGHT) : 0);
+    //4[2]、4[8]、4[10]、8[2一定有上、右上；左、左上与原宏块是否有左有关
     h->mb.i_neighbour4[2] =
     h->mb.i_neighbour4[8] =
     h->mb.i_neighbour4[10] =
     h->mb.i_neighbour8[2] = MB_TOP|MB_TOPRIGHT | ((h->mb.i_neighbour_intra & MB_LEFT) ? (MB_LEFT|MB_TOPLEFT) : 0);
+    //4[5]、8[1]一定有左；右上与原宏块是否有右上有关；上、左上和原宏块是否有上有关
     h->mb.i_neighbour4[5] =
     h->mb.i_neighbour8[1] = MB_LEFT | (h->mb.i_neighbour_intra & MB_TOPRIGHT)
                             | ((h->mb.i_neighbour_intra & MB_TOP) ? MB_TOP|MB_TOPLEFT : 0);

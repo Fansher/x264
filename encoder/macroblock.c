@@ -506,6 +506,7 @@ void x264_mb_encode_chroma( x264_t *h, int b_inter, int i_qp )
         mb_encode_chroma_internal( h, b_inter, i_qp, 1 );
 }
 
+//编码skip类型宏块
 static void macroblock_encode_skip( x264_t *h )
 {
     M32( &h->mb.cache.non_zero_count[x264_scan8[ 0]] ) = 0;
